@@ -106,7 +106,7 @@ function render() {
   $('summary').textContent=tracks.length ? SECTIONS.map(s=>`${s}: ${tracks.filter(t=>t.section===s).length}`).join(' · ') : 'Load and arrange the songs first.';
   $('create').disabled=busy || !tracks.length || tracks.some(t=>!t.section) || !!store.getItem(receiptKey);
   $('export').disabled=busy || !original.length;
-  $('apply-order').disabled=busy || !tracks.length;
+  $('apply-order').disabled=busy;
   $('update').disabled=busy || !loaded || !tracks.length || tracks.some(t=>!t.section) || loaded.owner !== currentUser;
 }
 async function create() {
@@ -136,7 +136,11 @@ $('redirect').textContent=redirect;
 $('connect').onclick=()=>run(connect);
 $('disconnect').onclick=()=>{store.removeItem('spotify-token'); store.removeItem('spotify-state'); store.removeItem('spotify-verifier'); location.replace(redirect);};
 $('load').onclick=()=>run(load); $('create').onclick=()=>run(create);
-$('apply-order').onclick=()=>run(applySavedOrder); $('update').onclick=()=>run(updateCurrent);
+$('apply-order').onclick=()=>run(async()=>{
+  $('order-status').textContent='Checking your loaded songs against the CSV…';
+  try { await applySavedOrder(); $('order-status').textContent='Applied all 73 songs in CSV order. Scroll to step 3 and choose Update loaded playlist order to save to Spotify.'; }
+  catch(error) { $('order-status').textContent=error.message; throw error; }
+}); $('update').onclick=()=>run(updateCurrent);
 $('export').onclick=()=>{
   const blob=new Blob([JSON.stringify(original,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob);
   const a=document.createElement('a'); a.href=url; a.download='wedding-original-order.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -159,7 +163,8 @@ run(async()=>{
 });
 
 async function applySavedOrder() {
-  const response = await fetch('wedding-order.json', {cache:'no-store'});
+  if (!tracks.length) throw new Error('Click Load playlist first, wait for the song count, then apply the CSV order.');
+  const response = await fetch('wedding-order.json', {cache:'no-store', signal:AbortSignal.timeout(30000)});
   if (!response.ok) throw new Error('Could not load the saved CSV order. Refresh after the latest deployment completes.');
   const rows = await response.json();
   const order = rows.slice().sort((a,b)=>a.order-b.order);
