@@ -3,7 +3,7 @@ const CLIENT_ID = 'e709c8512cd843dba2a399d3d4fea01b';
 const SECTIONS = ['Light & Playful', 'Romantic & Intimate', 'Playful Again'];
 const redirect = new URL(location.pathname, location.origin).href;
 const $ = id => document.getElementById(id);
-let tracks = [], original = [], busy = false;
+let tracks = [], original = [], busy = false, loaded = null, currentUser = null;
 const receiptKey = 'wedding-reception-receipt';
 const store = sessionStorage;
 function status(message) { $('status').textContent = message; }
@@ -17,7 +17,7 @@ async function connect() {
   const challenge = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
   const url = new URL('https://accounts.spotify.com/authorize');
   url.search = new URLSearchParams({client_id: CLIENT_ID, response_type: 'code', redirect_uri: redirect,
-    scope: 'playlist-read-private playlist-read-collaborative playlist-modify-private',
+    scope: 'playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public',
     state, code_challenge_method: 'S256', code_challenge: challenge});
   location.assign(url);
 }
@@ -40,7 +40,7 @@ async function api(path, method='GET', body) {
   const response = await fetch('https://api.spotify.com/v1' + path, {method, headers:{Authorization:'Bearer ' + await accessToken(), ...(body ? {'Content-Type':'application/json'} : {})}, ...(body ? {body:JSON.stringify(body)} : {})});
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(`Spotify ${response.status}: ${data.error?.message || 'Request failed'}. ${response.status === 403 ? 'Check developer app eligibility and permitted Spotify users.' : response.status === 429 ? 'Rate limit reached; wait before retrying.' : ''}`);
+    throw new Error(`Spotify ${response.status}: ${data.error?.message || 'Request failed'}. ${response.status === 403 ? 'Reconnect Spotify to grant playlist permissions; also check developer app eligibility and permitted Spotify users.' : response.status === 429 ? 'Rate limit reached; wait before retrying.' : ''}`);
   }
   return response.status === 204 ? null : response.json();
 }
@@ -63,7 +63,7 @@ function playlistId(input) {
 }
 async function load() {
   const id = playlistId($('source').value);
-  const metadata = await api(`/playlists/${id}?fields=name,snapshot_id`);
+  const metadata = await api(`/playlists/${id}?fields=name,snapshot_id,owner(id)`);
   const rows = await items(id);
   const after = await api(`/playlists/${id}?fields=snapshot_id`);
   if (metadata.snapshot_id !== after.snapshot_id) throw new Error('The source changed during loading. Load it again.');
@@ -74,6 +74,7 @@ async function load() {
   });
   if (!output.length) throw new Error('Spotify returned no songs.');
   original = output.map(t => ({...t})); tracks = output;
+  loaded = {id, name:metadata.name, snapshot:metadata.snapshot_id, owner:metadata.owner?.id};
   render(); status(`Loaded ${output.length} songs from ${metadata.name}. ${output.length !== 73 ? 'This differs from the expected 73 tracks. ' : ''}Assign the three sections before creating.`);
 }
 function render() {
@@ -105,6 +106,8 @@ function render() {
   $('summary').textContent=tracks.length ? SECTIONS.map(s=>`${s}: ${tracks.filter(t=>t.section===s).length}`).join(' · ') : 'Load and arrange the songs first.';
   $('create').disabled=busy || !tracks.length || tracks.some(t=>!t.section) || !!store.getItem(receiptKey);
   $('export').disabled=busy || !original.length;
+  $('apply-order').disabled=busy || !tracks.length;
+  $('update').disabled=busy || !loaded || !tracks.length || tracks.some(t=>!t.section) || loaded.owner !== currentUser;
 }
 async function create() {
   if (store.getItem(receiptKey)) throw new Error('A playlist was already created in this tab. Check the saved playlist link before making another.');
@@ -133,6 +136,7 @@ $('redirect').textContent=redirect;
 $('connect').onclick=()=>run(connect);
 $('disconnect').onclick=()=>{store.removeItem('spotify-token'); store.removeItem('spotify-state'); store.removeItem('spotify-verifier'); location.replace(redirect);};
 $('load').onclick=()=>run(load); $('create').onclick=()=>run(create);
+$('apply-order').onclick=()=>run(applySavedOrder); $('update').onclick=()=>run(updateCurrent);
 $('export').onclick=()=>{
   const blob=new Blob([JSON.stringify(original,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob);
   const a=document.createElement('a'); a.href=url; a.download='wedding-original-order.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -149,7 +153,74 @@ run(async()=>{
   }
   const receipt=store.getItem(receiptKey); if (receipt) showReceipt(JSON.parse(receipt));
   if (token()) {
-    const me=await api('/me'); $('account').textContent=`Connected as ${me.display_name || me.id}`; $('disconnect').hidden=false;
+    const me=await api('/me'); currentUser=me.id; $('account').textContent=`Connected as ${me.display_name || me.id}`; $('disconnect').hidden=false;
     status('Connected. Load your playlist to arrange its songs.');
   }
 });
+
+async function applySavedOrder() {
+  const response = await fetch('wedding-order.json', {cache:'no-store'});
+  if (!response.ok) throw new Error('Could not load the saved CSV order. Refresh after the latest deployment completes.');
+  const rows = await response.json();
+  const order = rows.slice().sort((a,b)=>a.order-b.order);
+  if (order.length !== 73 || order.some((r,i)=>r.order !== i+1)) throw new Error('The saved order must contain positions 1–73 exactly once.');
+  const available = new Map();
+  for (const t of tracks) { if (!available.has(t.uri)) available.set(t.uri,[]); available.get(t.uri).push(t); }
+  const arranged = [];
+  for (const row of order) {
+    const section = SECTIONS.find(s=>s.toLowerCase()===row.section.toLowerCase());
+    if (!section) throw new Error(`Unknown CSV section for ${row.title}.`);
+    const t = available.get(row.uri)?.shift();
+    if (!t) throw new Error(`CSV song is missing from the loaded playlist: ${row.title} — ${row.artist}. Nothing was changed.`);
+    arranged.push({...t,section});
+  }
+  if ([...available.values()].some(list=>list.length)) throw new Error('The loaded playlist has extra songs not in the CSV. Nothing was changed.');
+  if (arranged.some((t,i)=>i && SECTIONS.indexOf(t.section)<SECTIONS.indexOf(arranged[i-1].section))) throw new Error('CSV sections are not in the expected sequence.');
+  tracks=arranged;
+  render(); status('Matched all 73 songs and applied the exact CSV order in this preview. Choose Update loaded playlist order to save it to Spotify, or create a new private copy.');
+}
+function rowUris(rows) { return rows.map(row=>(row.item || row.track)?.uri); }
+async function updateCurrent() {
+  if (!loaded || loaded.owner !== currentUser) throw new Error('Load a playlist owned by your connected Spotify account.');
+  const ordered=SECTIONS.flatMap(s=>tracks.filter(t=>t.section===s));
+  if (!ordered.length || ordered.length !== tracks.length) throw new Error('Apply the CSV order or assign every section first.');
+  const scope=token()?.scope || '';
+  if (!scope.split(' ').includes('playlist-modify-public') || !scope.split(' ').includes('playlist-modify-private')) throw new Error('Click Connect Spotify again to grant permission to reorder both public and private playlists.');
+  const target=loaded.id, name=loaded.name;
+  // Refuse stale data before the first write. Spotify checks snapshot_id on every move.
+  const before=await api(`/playlists/${target}?fields=snapshot_id`);
+  const current=rowUris(await items(target));
+  const after=await api(`/playlists/${target}?fields=snapshot_id`);
+  if (before.snapshot_id!==loaded.snapshot || after.snapshot_id!==before.snapshot_id || JSON.stringify(current)!==JSON.stringify(original.map(t=>t.uri))) throw new Error('Playlist changed since loading. Load it again, then apply the CSV order. No changes were made.');
+  const desired=ordered.map(t=>t.uri);
+  if (JSON.stringify(current.slice().sort())!==JSON.stringify(desired.slice().sort())) throw new Error('Song lists differ. Refusing to add or remove tracks.');
+  if (JSON.stringify(current)===JSON.stringify(desired)) {status('This playlist already matches the requested order. No changes needed.');return;}
+  if (!confirm(`Reorder all ${desired.length} songs IN "${name}"? This changes this existing playlist, creates no copy, and keeps every song. Avoid editing the playlist elsewhere until this finishes.`)) return;
+  let snapshot=before.snapshot_id, moves=0;
+  try {
+    for (let i=0;i<desired.length;i++) {
+      if (current[i]===desired[i]) continue;
+      const from=current.indexOf(desired[i],i+1);
+      if (from<0) throw new Error('Song matching failed.');
+      status(`Updating ${name}: position ${i+1} of ${desired.length}…`);
+      const result=await api(`/playlists/${target}/items`,'PUT',{range_start:from,insert_before:i,range_length:1,snapshot_id:snapshot});
+      moves++;
+      if (!result?.snapshot_id) throw new Error('Spotify did not return an updated snapshot.');
+      snapshot=result.snapshot_id;
+      const [uri]=current.splice(from,1); current.splice(i,0,uri);
+    }
+    const verificationBefore=await api(`/playlists/${target}?fields=snapshot_id`);
+    const actual=rowUris(await items(target));
+    const verificationAfter=await api(`/playlists/${target}?fields=snapshot_id`);
+    if (verificationBefore.snapshot_id!==snapshot || verificationAfter.snapshot_id!==snapshot || JSON.stringify(actual)!==JSON.stringify(desired)) throw new Error('Final order verification differed.');
+    loaded.snapshot=snapshot;
+    original=ordered.map((t,i)=>({...t,position:i+1})); tracks=original.map(t=>({...t}));
+    const a=document.createElement('a');a.href=`https://open.spotify.com/playlist/${target}`;a.target='_blank';a.rel='noopener';a.textContent=`Open ${name}`;
+    $('result').replaceChildren(document.createTextNode('Updated and verified: '),a);
+    status(`Updated ${name}: all ${desired.length} songs now match the preview order. No songs added or removed.`);
+  } catch(error) {
+    // Never retry writes automatically: a lost response can leave a partially reordered playlist.
+    loaded=null;
+    throw new Error(`${error.message} The playlist may be partially reordered (${moves} moves acknowledged). Load it again and apply the CSV order before retrying. No songs were deliberately added or removed.`);
+  }
+}

@@ -9,7 +9,9 @@ Use this app through GitHub Pages without installing Python or running a server 
 3. The expected site address is `https://sw20279495-tech.github.io/Wedding-Reception/`. Confirm the actual address in Pages settings.
 4. Add that exact address (including trailing slash) to your Spotify developer app's Redirect URIs. The app displays the redirect URL it uses. If you use a custom domain or open index.html explicitly, register that exact displayed URL instead.
 5. Open the site, connect Spotify, load the Wedding playlist, and assign each song to Light & Playful, Romantic & Intimate, or Playful Again. Move songs within each section with the arrow buttons. Download original order before leaving the tab if desired.
-6. Click Create and confirm. The app creates a new **private** Wedding Reception playlist, adds all loaded songs in section order, and checks their exact URI order. It never edits the source playlist.
+6. For the uploaded Wedding_Reordered.csv, click **Apply Wedding_Reordered.csv order**. The saved order contains 73 Spotify track URIs: 24 Light & Playful, 29 Romantic & Intimate, and 20 Playful Again. All songs must match the loaded playlist exactly, including duplicate counts; missing/extra songs stop the operation. This step only changes the preview.
+7. To modify the existing playlist, download its original order, then click **Update loaded playlist order** and confirm its name. Only playlists owned by your connected account can be updated. Reconnect Spotify after this update to grant both public and private playlist modification scopes. The app checks the loaded snapshot, moves existing songs with snapshot checks, and verifies the final order. It does not add or remove songs. Avoid editing from another device while updating. An interruption can leave a partial order: load again, reapply the CSV, then retry. No automatic write retries occur.
+8. Alternatively, **Create private Wedding Reception playlist** creates a new private copy and leaves the loaded playlist unchanged.
 
 Spotify app eligibility and permitted-user restrictions still apply. A public website does not give everyone Spotify API access. If Spotify denies access, check the developer dashboard's current restrictions and account permissions.
 
@@ -17,11 +19,11 @@ Spotify app eligibility and permitted-user restrictions still apply. A public we
 
 Tokens and the creation receipt are stored in sessionStorage for the current tab, not in GitHub. Disconnect clears authorization. Refreshing retains the creation receipt but loses unsaved song arrangement. Closing the tab clears its session. Download the original order to keep a separate copy. The receipt link is saved immediately on playlist creation; if adding songs fails, inspect that playlist before trying again. A saved receipt prevents another creation in the same tab. Do not blindly reconnect in a new tab and create duplicates.
 
-Track count is read from Spotify; 73 is an expectation, not a verified count. Local, unavailable, or non-song items stop loading rather than being silently skipped. Music is not automatically categorized.
+Track count is read from Spotify. The saved CSV contains 73 songs; applying it requires an exact match with the loaded song list. Local, unavailable, or non-song items stop loading rather than being silently skipped. The saved CSV supplies the three sections and exact order; manual section assignment is also available.
 
 ## Validation
 
-JavaScript syntax and browser flow are checked locally with mocked Spotify responses: connection state, loading, section assignment, private creation, ordering, final verification, and creation receipt persistence. Live Spotify authorization, account eligibility, GitHub Pages publication, and real playlist creation require validation after deployment.
+JavaScript syntax and browser flow are checked locally with mocked Spotify responses: connection state, loading, section assignment, private creation, ordering, final verification, creation receipt persistence, and the full 73-song CSV flow (successful in-place reorder, missing song, stale snapshot, and interrupted write). Live Spotify authorization, account eligibility, GitHub Pages publication, and real playlist creation require validation after deployment.
 
 ## Optional local Python organizer
 
